@@ -1,7 +1,7 @@
 # ocrline
 
 [![CI](https://github.com/karolusz/ocrline/actions/workflows/ci.yml/badge.svg)](https://github.com/karolusz/ocrline/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/karolusz/ocrline/branch/main/graph/badge.svg)](https://codecov.io/gh/karolusz/ocrline)
+[![coverage](https://raw.githubusercontent.com/karolusz/ocrline/badges/coverage-badge.svg)](https://github.com/karolusz/ocrline/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/karolusz/ocrline.svg)](https://pkg.go.dev/github.com/karolusz/ocrline)
 [![Go Report Card](https://goreportcard.com/badge/github.com/karolusz/ocrline)](https://goreportcard.com/report/github.com/karolusz/ocrline)
 
