@@ -265,14 +265,8 @@ func Marshal(v any) (string, error) {
 //
 // v must be a struct or a pointer to a struct.
 func MarshalWidth(v any, width int) (string, error) {
-	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Pointer {
-		if rv.IsNil() {
-			return "", &InvalidMarshalError{reflect.TypeOf(v)}
-		}
-		rv = rv.Elem()
-	}
-	if rv.Kind() != reflect.Struct {
+	rv, err := derefStruct(reflect.ValueOf(v))
+	if err != nil {
 		return "", &InvalidMarshalError{reflect.TypeOf(v)}
 	}
 
@@ -289,64 +283,17 @@ func MarshalWidth(v any, width int) (string, error) {
 		if !fieldVal.IsValid() {
 			continue // nil embedded pointer
 		}
-
 		if fi.tag.end > maxEnd {
 			maxEnd = fi.tag.end
 		}
-
-		w := fi.tag.end - fi.tag.start
-		var str string
-
-		// Check for Marshaler interface
-		if m, ok := marshalerFor(fieldVal); ok {
-			s, err := m.MarshalOCR()
-			if err != nil {
-				return "", &MarshalFieldError{Field: fi.name, Err: err}
-			}
-			str = s
-		} else {
-			str = fieldToString(fieldVal)
+		s, err := marshalField(fi, fieldVal)
+		if err != nil {
+			return "", err
 		}
-
-		// Handle omitempty
-		if fi.tag.omitempty && str == "" {
-			str = strings.Repeat(string(fi.pad), w)
-			segments[fi.tag.start] = str
-			continue
-		}
-
-		segments[fi.tag.start] = padString(str, w, fi.pad, fi.align)
+		segments[fi.tag.start] = s
 	}
 
-	// Determine effective width
-	effectiveWidth := width
-	if effectiveWidth == 0 {
-		effectiveWidth = maxEnd
-	}
-
-	// Build the output line
-	buf := make([]byte, effectiveWidth)
-	for i := range buf {
-		buf[i] = '0' // default gap fill
-	}
-
-	// Apply custom gap fills if the struct implements Filler.
-	if f, ok := v.(Filler); ok {
-		for _, fill := range f.OCRFill() {
-			end := min(fill.End, effectiveWidth)
-			for i := fill.Start; i < end; i++ {
-				buf[i] = fill.Char
-			}
-		}
-	}
-
-	for _, fi := range info.fields {
-		if s, ok := segments[fi.tag.start]; ok {
-			copy(buf[fi.tag.start:], s)
-		}
-	}
-
-	return string(buf), nil
+	return buildLine(v, segments, info, width, maxEnd), nil
 }
 
 // Unmarshal parses an OCR line and stores the result in the value pointed to by v.
@@ -370,7 +317,6 @@ func Unmarshal(line string, v any) error {
 	}
 
 	for _, fi := range info.fields {
-		// Check field fits within the input line
 		if fi.tag.end > len(line) {
 			return &UnmarshalRangeError{
 				Field:     fi.name,
@@ -385,33 +331,107 @@ func Unmarshal(line string, v any) error {
 			return &UnmarshalFieldError{Field: fi.name, Err: fmt.Errorf("cannot set field (unexported?)")}
 		}
 
-		slice := line[fi.tag.start:fi.tag.end]
-
-		// Check for Unmarshaler interface (pointer receiver)
-		if fieldVal.CanAddr() {
-			if u, ok := fieldVal.Addr().Interface().(Unmarshaler); ok {
-				if err := u.UnmarshalOCR(slice); err != nil {
-					return &UnmarshalFieldError{Field: fi.name, Err: err}
-				}
-				continue
-			}
-		}
-		// Check value receiver
-		if fieldVal.CanInterface() {
-			if u, ok := fieldVal.Interface().(Unmarshaler); ok {
-				if err := u.UnmarshalOCR(slice); err != nil {
-					return &UnmarshalFieldError{Field: fi.name, Err: err}
-				}
-				continue
-			}
-		}
-
-		if err := setField(fieldVal, slice); err != nil {
-			return &UnmarshalFieldError{Field: fi.name, Err: err}
+		if err := unmarshalField(fi, fieldVal, line[fi.tag.start:fi.tag.end]); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// --- Internal helpers ---
+
+// derefStruct dereferences a pointer to a struct, returning the struct Value.
+// Returns an error if v is not a struct or a non-nil pointer to a struct.
+func derefStruct(rv reflect.Value) (reflect.Value, error) {
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return reflect.Value{}, fmt.Errorf("nil pointer")
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return reflect.Value{}, fmt.Errorf("not a struct")
+	}
+	return rv, nil
+}
+
+// marshalField converts a single struct field to its padded string representation.
+func marshalField(fi fieldInfo, fieldVal reflect.Value) (string, error) {
+	w := fi.tag.end - fi.tag.start
+	var str string
+
+	if m, ok := marshalerFor(fieldVal); ok {
+		s, err := m.MarshalOCR()
+		if err != nil {
+			return "", &MarshalFieldError{Field: fi.name, Err: err}
+		}
+		str = s
+	} else {
+		str = fieldToString(fieldVal)
+	}
+
+	if fi.tag.omitempty && str == "" {
+		return strings.Repeat(string(fi.pad), w), nil
+	}
+
+	return padString(str, w, fi.pad, fi.align), nil
+}
+
+// unmarshalField decodes a string slice into a single struct field.
+func unmarshalField(fi fieldInfo, fieldVal reflect.Value, data string) error {
+	// Check for Unmarshaler interface (pointer receiver first, then value)
+	if fieldVal.CanAddr() {
+		if u, ok := fieldVal.Addr().Interface().(Unmarshaler); ok {
+			if err := u.UnmarshalOCR(data); err != nil {
+				return &UnmarshalFieldError{Field: fi.name, Err: err}
+			}
+			return nil
+		}
+	}
+	if fieldVal.CanInterface() {
+		if u, ok := fieldVal.Interface().(Unmarshaler); ok {
+			if err := u.UnmarshalOCR(data); err != nil {
+				return &UnmarshalFieldError{Field: fi.name, Err: err}
+			}
+			return nil
+		}
+	}
+
+	if err := setField(fieldVal, data); err != nil {
+		return &UnmarshalFieldError{Field: fi.name, Err: err}
+	}
+	return nil
+}
+
+// buildLine assembles the final output line from segments, applying gap fills.
+func buildLine(v any, segments map[int]string, info *structInfo, width, maxEnd int) string {
+	effectiveWidth := width
+	if effectiveWidth == 0 {
+		effectiveWidth = maxEnd
+	}
+
+	buf := make([]byte, effectiveWidth)
+	for i := range buf {
+		buf[i] = '0'
+	}
+
+	if f, ok := v.(Filler); ok {
+		for _, fill := range f.OCRFill() {
+			end := min(fill.End, effectiveWidth)
+			for i := fill.Start; i < end; i++ {
+				buf[i] = fill.Char
+			}
+		}
+	}
+
+	for _, fi := range info.fields {
+		if s, ok := segments[fi.tag.start]; ok {
+			copy(buf[fi.tag.start:], s)
+		}
+	}
+
+	return string(buf)
 }
 
 // --- Internal helpers ---
