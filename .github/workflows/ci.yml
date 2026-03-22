@@ -70,12 +70,13 @@ jobs:
       - name: Push badge to badges branch
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
+          # Save badge outside the working tree
+          cp coverage-badge.svg /tmp/coverage-badge.svg
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Create or update the badges branch
           git checkout --orphan badges-tmp
           git rm -rf .
-          mv coverage-badge.svg .
+          cp /tmp/coverage-badge.svg coverage-badge.svg
           git add coverage-badge.svg
           git commit -m "Update coverage badge: ${{ env.COVERAGE }}%"
           git push origin HEAD:badges --force
