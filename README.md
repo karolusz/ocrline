@@ -143,6 +143,29 @@ func (s *ServiceCode) UnmarshalOCR(data string) error {
 }
 ```
 
+## Record Type Dispatch
+
+When parsing files with multiple record types, unmarshal a small header struct first to determine the type, then unmarshal the full line into the correct struct:
+
+```go
+var header struct {
+    FormatCode string `ocr:"0:2"`
+    RecordType int    `ocr:"6:8"`
+}
+ocrline.Unmarshal(line, &header)
+
+switch header.RecordType {
+case 10:
+    var r TransmissionStart
+    ocrline.Unmarshal(line, &r)
+case 89:
+    var r TransmissionEnd
+    ocrline.Unmarshal(line, &r)
+}
+```
+
+Both calls are cheap - struct metadata is cached per type, and lines are only 80 characters.
+
 ## Line Width
 
 `Marshal` outputs 80 characters by default. Use `MarshalWidth` for other widths:
