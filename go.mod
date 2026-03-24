@@ -1,3 +1,3 @@
-module github.com/karolusz/ocrline
+module github.com/anyfin/ocrline
 
 go 1.22
